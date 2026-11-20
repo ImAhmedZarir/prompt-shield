@@ -4,6 +4,13 @@
   "description": "Ultra-fast zero-trust security & privacy proxy for LLM APIs. Strips leaked secrets, anonymizes PII, and blocks prompt injections in real time.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
+  },
   "bin": {
     "prompt-shield": "./dist/bin/cli.js"
   },
@@ -11,7 +18,7 @@
     "build": "tsc",
     "start": "node dist/bin/cli.js",
     "dev": "tsx src/bin/cli.ts",
-    "test": "node --test dist/tests/**/*.test.js",
+    "test": "node --test dist/tests/",
     "lint": "tsc --noEmit"
   },
   "keywords": [
