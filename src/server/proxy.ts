@@ -4,6 +4,12 @@ import { URL } from "node:url";
 import { SecurityPipeline } from "../core/scanner.js";
 import { ShieldConfig } from "../types/index.js";
 
+const CORS_HEADERS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, OpenAI-Beta, Anthropic-Version"
+};
+
 export class ProxyServer {
   private pipeline: SecurityPipeline;
   private config: ShieldConfig;
@@ -49,6 +55,13 @@ export class ProxyServer {
   }
 
   private handleRequest(clientReq: http.IncomingMessage, clientRes: http.ServerResponse): void {
+    // 1. Handle CORS Preflight (OPTIONS)
+    if (clientReq.method === "OPTIONS") {
+      clientRes.writeHead(204, CORS_HEADERS);
+      clientRes.end();
+      return;
+    }
+
     const upstreamParsed = new URL(this.config.upstreamUrl);
     
     // Support base paths (e.g. https://api.openai.com or https://example.com/api)
@@ -75,7 +88,10 @@ export class ProxyServer {
           const inspection = this.inspectAndSanitizePayload(jsonPayload);
 
           if (!inspection.isSafe) {
-            clientRes.writeHead(400, { "Content-Type": "application/json" });
+            clientRes.writeHead(400, {
+              "Content-Type": "application/json",
+              ...CORS_HEADERS
+            });
             clientRes.end(JSON.stringify({
               error: {
                 message: "Blocked by PromptShield: security policy violation detected in prompt.",
@@ -102,13 +118,34 @@ export class ProxyServer {
         method: clientReq.method,
         headers
       }, (upstreamRes) => {
-        clientRes.writeHead(upstreamRes.statusCode || 500, upstreamRes.headers);
+        const responseHeaders = {
+          ...upstreamRes.headers,
+          ...CORS_HEADERS
+        };
+        clientRes.writeHead(upstreamRes.statusCode || 500, responseHeaders);
         upstreamRes.pipe(clientRes);
       });
 
+      // 2. Client Abort / Socket Disconnect Handler: cancel upstream immediately to prevent token waste
+      clientReq.on("close", () => {
+        if (!clientRes.writableEnded) {
+          upstreamReq.destroy();
+        }
+      });
+
       upstreamReq.on("error", (err) => {
-        clientRes.writeHead(502, { "Content-Type": "application/json" });
-        clientRes.end(JSON.stringify({ error: { message: "PromptShield: upstream connection failed", details: err.message } }));
+        if (!clientRes.headersSent) {
+          clientRes.writeHead(502, {
+            "Content-Type": "application/json",
+            ...CORS_HEADERS
+          });
+          clientRes.end(JSON.stringify({
+            error: {
+              message: "PromptShield: upstream connection failed",
+              details: err.message
+            }
+          }));
+        }
       });
 
       upstreamReq.write(finalBody);
@@ -123,6 +160,7 @@ export class ProxyServer {
     // Handle standard chat completions format: { messages: [{ role, content }] }
     if (Array.isArray(payload.messages)) {
       for (const msg of payload.messages) {
+        // Handle standard string content
         if (typeof msg.content === "string") {
           const report = this.pipeline.analyze(msg.content);
           if (!report.isSafe) {
@@ -131,6 +169,20 @@ export class ProxyServer {
             if (report.injections.length > 0) violations.push(...report.injections);
           }
           msg.content = report.sanitizedText;
+        } 
+        // Handle multimodal array content format: [{ type: "text", text: "..." }]
+        else if (Array.isArray(msg.content)) {
+          for (const part of msg.content) {
+            if (part && typeof part === "object" && part.type === "text" && typeof part.text === "string") {
+              const report = this.pipeline.analyze(part.text);
+              if (!report.isSafe) {
+                isSafe = false;
+                if (report.secrets.length > 0) violations.push(...report.secrets);
+                if (report.injections.length > 0) violations.push(...report.injections);
+              }
+              part.text = report.sanitizedText;
+            }
+          }
         }
       }
     } else if (typeof payload.prompt === "string") {
