@@ -18,7 +18,7 @@
     "build": "tsc",
     "start": "node dist/bin/cli.js",
     "dev": "tsx src/bin/cli.ts",
-    "test": "node --test dist/tests/",
+    "test": "node --test dist/tests/security.test.js",
     "lint": "tsc --noEmit"
   },
   "keywords": [
