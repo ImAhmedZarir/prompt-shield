@@ -43,7 +43,6 @@ export function scanPII(text: string): DetectedPII[] {
   // 2. Phone Numbers (international and formatted)
   const phoneRegex = /(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g;
   for (const m of text.matchAll(phoneRegex)) {
-    // Avoid short numeric sequences
     if (m[0].replace(/\D/g, "").length >= 10) {
       piiList.push({
         type: "PHONE",
@@ -58,7 +57,6 @@ export function scanPII(text: string): DetectedPII[] {
   // 3. IPv4 Addresses
   const ipv4Regex = /\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b/g;
   for (const m of text.matchAll(ipv4Regex)) {
-    // Exclude common localhost/internal loops if desired, but default to reporting
     piiList.push({
       type: "IPV4",
       raw: m[0],
@@ -68,11 +66,11 @@ export function scanPII(text: string): DetectedPII[] {
     });
   }
 
-  // 4. Credit Cards with Luhn Check
-  const ccRegex = /\b(?:\d[ -]*?){13,19}\b/g;
+  // 4. Credit Cards with Linear ReDoS-Safe Regex + Luhn Validation
+  const ccRegex = /\b\d[\d -]{11,22}\d\b/g;
   for (const m of text.matchAll(ccRegex)) {
     const rawDigits = m[0].replace(/[\s-]/g, "");
-    if (validateLuhn(rawDigits)) {
+    if (rawDigits.length >= 13 && rawDigits.length <= 19 && validateLuhn(rawDigits)) {
       piiList.push({
         type: "CREDIT_CARD",
         raw: m[0],
