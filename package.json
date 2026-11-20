@@ -1,0 +1,42 @@
+{
+  "name": "prompt-shield",
+  "version": "1.0.0",
+  "description": "Ultra-fast zero-trust security & privacy proxy for LLM APIs. Strips leaked secrets, anonymizes PII, and blocks prompt injections in real time.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "prompt-shield": "./dist/bin/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/bin/cli.js",
+    "dev": "tsx src/bin/cli.ts",
+    "test": "node --test dist/tests/**/*.test.js",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "ai-security",
+    "llm",
+    "proxy",
+    "cybersecurity",
+    "zero-trust",
+    "data-loss-prevention",
+    "guardrails",
+    "privacy",
+    "prompt-injection"
+  ],
+  "author": "Ahmed Ishtiaque Zarir <ahmedzarir07@gmail.com> (https://github.com/ImAhmedZarir)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ImAhmedZarir/prompt-shield.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ImAhmedZarir/prompt-shield/issues"
+  },
+  "homepage": "https://github.com/ImAhmedZarir/prompt-shield#readme",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}
