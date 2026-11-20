@@ -50,7 +50,12 @@ export class ProxyServer {
 
   private handleRequest(clientReq: http.IncomingMessage, clientRes: http.ServerResponse): void {
     const upstreamParsed = new URL(this.config.upstreamUrl);
-    const targetUrl = new URL(clientReq.url || "/", upstreamParsed);
+    
+    // Support base paths (e.g. https://api.openai.com or https://example.com/api)
+    const basePath = upstreamParsed.pathname.replace(/\/+$/, "");
+    const clientPath = (clientReq.url || "/").replace(/^\/+/, "");
+    const combinedPath = basePath ? `${basePath}/${clientPath}` : `/${clientPath}`;
+    const targetUrl = new URL(combinedPath, upstreamParsed.origin);
 
     const isSecure = upstreamParsed.protocol === "https:";
     const requester = isSecure ? https.request : http.request;
