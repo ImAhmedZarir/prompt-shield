@@ -1,11 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
+import http from "node:http";
 import { calculateShannonEntropy } from "../detectors/entropy.js";
 import { scanSecrets } from "../detectors/secrets.js";
 import { scanPII, validateLuhn } from "../detectors/pii.js";
 import { scanInjections } from "../detectors/injection.js";
 import { AnonymizerVault } from "../anonymizer/vault.js";
 import { SecurityPipeline } from "../core/scanner.js";
+import { ProxyServer } from "../server/proxy.js";
 
 describe("Shannon Entropy Calculator", () => {
   it("computes low entropy for uniform text", () => {
@@ -52,6 +54,14 @@ describe("PII Redaction & Rehydration", () => {
     const rehydrated = vault.rehydrate(result.sanitizedText);
     assert.strictEqual(rehydrated, prompt);
   });
+
+  it("safely handles long adversarial repeated sequences without ReDoS", () => {
+    const start = performance.now();
+    const maliciousInput = "1 2 ".repeat(10000);
+    scanPII(maliciousInput);
+    const duration = performance.now() - start;
+    assert.ok(duration < 100, `Regex took too long: ${duration}ms`);
+  });
 });
 
 describe("Prompt Injection Defense", () => {
@@ -82,5 +92,76 @@ describe("Integrated Security Pipeline", () => {
     const report = pipeline.analyze("Please send invoice to bob@example.com today.");
     assert.strictEqual(report.isSafe, true);
     assert.ok(report.sanitizedText.includes("[REDACTED_EMAIL_1]"));
+  });
+});
+
+describe("Proxy Server Interception & Preflight", () => {
+  it("handles OPTIONS preflight CORS requests with 204", async () => {
+    const proxy = new ProxyServer({ port: 9191 });
+    await proxy.start();
+
+    try {
+      const res = await new Promise<{ status: number; headers: http.IncomingHttpHeaders }>((resolve, reject) => {
+        const req = http.request({
+          hostname: "localhost",
+          port: 9191,
+          method: "OPTIONS",
+          path: "/v1/chat/completions"
+        }, (res) => {
+          resolve({ status: res.statusCode || 0, headers: res.headers });
+        });
+        req.on("error", reject);
+        req.end();
+      });
+
+      assert.strictEqual(res.status, 204);
+      assert.strictEqual(res.headers["access-control-allow-origin"], "*");
+    } finally {
+      await proxy.stop();
+    }
+  });
+
+  it("inspects and blocks multimodal array formatted payloads with leaked keys", async () => {
+    const proxy = new ProxyServer({ port: 9192 });
+    await proxy.start();
+
+    try {
+      const payload = JSON.stringify({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Look at this key: AKIAIOSFODNN7EXAMPLE" }
+            ]
+          }
+        ]
+      });
+
+      const res = await new Promise<{ status: number; data: string }>((resolve, reject) => {
+        const req = http.request({
+          hostname: "localhost",
+          port: 9192,
+          method: "POST",
+          path: "/v1/chat/completions",
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(payload)
+          }
+        }, (res) => {
+          let body = "";
+          res.on("data", (c) => body += c);
+          res.on("end", () => resolve({ status: res.statusCode || 0, data: body }));
+        });
+        req.on("error", reject);
+        req.write(payload);
+        req.end();
+      });
+
+      assert.strictEqual(res.status, 400);
+      assert.ok(res.data.includes("AWS_ACCESS_KEY"));
+    } finally {
+      await proxy.stop();
+    }
   });
 });
