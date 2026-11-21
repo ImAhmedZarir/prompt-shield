@@ -40,5 +40,6 @@ export interface ShieldConfig {
   blockInjections: boolean;
   strictMode: boolean;
   entropyThreshold: number;
+  maxBodySize: number;
   logLevel: "debug" | "info" | "warn" | "error";
 }

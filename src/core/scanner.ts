@@ -16,6 +16,7 @@ export class SecurityPipeline {
       blockInjections: true,
       strictMode: false,
       entropyThreshold: 3.8,
+      maxBodySize: 10 * 1024 * 1024, // 10MB default
       logLevel: "info",
       ...config
     };
