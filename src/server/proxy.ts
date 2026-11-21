@@ -1,6 +1,7 @@
 import http from "node:http";
 import https from "node:https";
 import { URL } from "node:url";
+import zlib from "node:zlib";
 import { SecurityPipeline } from "../core/scanner.js";
 import { ShieldConfig } from "../types/index.js";
 
@@ -24,6 +25,7 @@ export class ProxyServer {
       blockInjections: true,
       strictMode: false,
       entropyThreshold: 3.8,
+      maxBodySize: 10 * 1024 * 1024, // 10MB max body limit
       logLevel: "info",
       ...config
     };
@@ -64,7 +66,7 @@ export class ProxyServer {
 
     const upstreamParsed = new URL(this.config.upstreamUrl);
     
-    // Support base paths (e.g. https://api.openai.com or https://example.com/api)
+    // Support base paths and query parameters correctly
     const basePath = upstreamParsed.pathname.replace(/\/+$/, "");
     const clientPath = (clientReq.url || "/").replace(/^\/+/, "");
     const combinedPath = basePath ? `${basePath}/${clientPath}` : `/${clientPath}`;
@@ -73,18 +75,64 @@ export class ProxyServer {
     const isSecure = upstreamParsed.protocol === "https:";
     const requester = isSecure ? https.request : http.request;
 
-    // Buffer incoming request body
+    // 2. Buffer incoming request body with strict size boundary to prevent DoS memory exhaustion
     const bodyChunks: Buffer[] = [];
-    clientReq.on("data", (chunk) => bodyChunks.push(chunk));
+    let receivedBytes = 0;
+    let isPayloadTooLarge = false;
+
+    clientReq.on("data", (chunk: Buffer) => {
+      receivedBytes += chunk.length;
+      if (receivedBytes > this.config.maxBodySize) {
+        isPayloadTooLarge = true;
+        clientReq.destroy();
+        if (!clientRes.headersSent) {
+          clientRes.writeHead(413, {
+            "Content-Type": "application/json",
+            ...CORS_HEADERS
+          });
+          clientRes.end(JSON.stringify({
+            error: {
+              message: `Payload Too Large: Request body exceeds maximum allowed size of ${this.config.maxBodySize} bytes.`,
+              type: "payload_too_large"
+            }
+          }));
+        }
+        return;
+      }
+      bodyChunks.push(chunk);
+    });
 
     clientReq.on("end", () => {
+      if (isPayloadTooLarge) return;
+
       let finalBody = Buffer.concat(bodyChunks);
+
+      // Handle request decompression if client sent gzip/deflate
+      const contentEncoding = (clientReq.headers["content-encoding"] || "").toLowerCase();
+      let decompressedBody = finalBody;
+      let wasCompressed = false;
+
+      if (finalBody.length > 0) {
+        try {
+          if (contentEncoding === "gzip") {
+            decompressedBody = zlib.gunzipSync(finalBody);
+            wasCompressed = true;
+          } else if (contentEncoding === "deflate") {
+            decompressedBody = zlib.inflateSync(finalBody);
+            wasCompressed = true;
+          }
+        } catch (err: any) {
+          clientRes.writeHead(400, { "Content-Type": "application/json", ...CORS_HEADERS });
+          clientRes.end(JSON.stringify({ error: { message: "Invalid compressed body", details: err.message } }));
+          return;
+        }
+      }
 
       // Inspect chat completion and embedding endpoints
       const contentType = clientReq.headers["content-type"] || "";
-      if (contentType.includes("application/json") && finalBody.length > 0) {
+      if (contentType.includes("application/json") && decompressedBody.length > 0) {
         try {
-          const jsonPayload = JSON.parse(finalBody.toString("utf8"));
+          const jsonPayload = JSON.parse(decompressedBody.toString("utf8"));
           const inspection = this.inspectAndSanitizePayload(jsonPayload);
 
           if (!inspection.isSafe) {
@@ -102,16 +150,24 @@ export class ProxyServer {
             return;
           }
 
-          // Replace body with sanitized payload
-          finalBody = Buffer.from(JSON.stringify(inspection.sanitizedPayload), "utf8");
+          // Replace body with sanitized payload (re-compressing if original was compressed)
+          const sanitizedJsonBuf = Buffer.from(JSON.stringify(inspection.sanitizedPayload), "utf8");
+          if (wasCompressed && contentEncoding === "gzip") {
+            finalBody = zlib.gzipSync(sanitizedJsonBuf);
+          } else if (wasCompressed && contentEncoding === "deflate") {
+            finalBody = zlib.deflateSync(sanitizedJsonBuf);
+          } else {
+            finalBody = sanitizedJsonBuf;
+          }
         } catch {
-          // If JSON parse fails, forward original body
+          // If JSON parse fails, forward original body safely
         }
       }
 
-      // Clone headers and update host & content-length
+      // Clone headers and update host & content-length (RFC 7230: strip transfer-encoding when content-length is set)
       const headers = { ...clientReq.headers };
       headers["host"] = upstreamParsed.host;
+      delete headers["transfer-encoding"];
       headers["content-length"] = Buffer.byteLength(finalBody).toString();
 
       const upstreamReq = requester(targetUrl, {
@@ -126,9 +182,9 @@ export class ProxyServer {
         upstreamRes.pipe(clientRes);
       });
 
-      // 2. Client Abort / Socket Disconnect Handler: cancel upstream immediately to prevent token waste
-      clientReq.on("close", () => {
-        if (!clientRes.writableEnded) {
+      // 3. Client Abort / Socket Disconnect Handler: cancel upstream immediately to prevent token waste
+      clientRes.on("close", () => {
+        if (!clientRes.writableFinished) {
           upstreamReq.destroy();
         }
       });
