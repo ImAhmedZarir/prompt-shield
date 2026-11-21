@@ -1,5 +1,5 @@
 import http from "node:http";
-import { ProxyServer } from "./dist/server/proxy.js";
+import { ProxyServer } from "../dist/server/proxy.js";
 
 async function runLiveTest() {
   console.log("=== STARTING PROMPT-SHIELD LIVE INTEGRATION TEST ===\n");
@@ -89,9 +89,15 @@ async function runLiveTest() {
     messages: [{ role: "user", content: "Contact alice@example.com at +1-555-321-4321 for details." }]
   });
   console.log("Status Code:", t3.status);
-  console.log("What upstream LLM received:", JSON.stringify(lastReceivedPayload, null, 2));
+  console.log("Response Body:", t3.data);
+  if (!lastReceivedPayload) {
+    console.error("No payload received by mock upstream!");
+    await proxy.stop();
+    await new Promise((resolve) => mockUpstream.close(resolve));
+    return;
+  }
   const userContent = lastReceivedPayload.messages[0].content;
-  const t3Passed = userContent.includes("[REDACTED_EMAIL_1]") && userContent.includes("[REDACTED_PHONE_1]");
+  const t3Passed = userContent.includes("[REDACTED_EMAIL_1_") && userContent.includes("[REDACTED_PHONE_1_");
   console.log(t3Passed ? "✅ TEST 3 PASSED: PII masked into synthetic tokens before reaching LLM.\n" : "❌ TEST 3 FAILED\n");
 
   // Teardown
