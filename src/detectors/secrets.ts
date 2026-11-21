@@ -47,8 +47,9 @@ export const SECRET_RULES: SecretRule[] = [
   },
   {
     type: "RSA_PRIVATE_KEY",
-    pattern: /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/g,
-    minEntropy: 4.0,
+    // Bound wildcard search between 10 and 8192 characters to prevent ReDoS on unclosed keys
+    pattern: /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[\s\S]{10,8192}?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/g,
+    minEntropy: 3.5,
     severity: "CRITICAL"
   },
   {

@@ -59,8 +59,11 @@ export const INJECTION_RULES: InjectionRule[] = [
 export function scanInjections(text: string, confidenceThreshold = 0.8): DetectedInjection[] {
   const detections: DetectedInjection[] = [];
 
+  // Normalize string by stripping zero-width spaces, soft hyphens, and invisible Unicode to defeat evasion
+  const normalized = text.replace(/[\u200B-\u200D\uFEFF\u00AD\u2060]/g, "");
+
   for (const rule of INJECTION_RULES) {
-    if (rule.pattern.test(text)) {
+    if (rule.pattern.test(text) || rule.pattern.test(normalized)) {
       if (rule.weight >= confidenceThreshold) {
         detections.push({
           pattern: rule.pattern.source,
